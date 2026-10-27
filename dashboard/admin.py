@@ -2,25 +2,34 @@
 
 import gradio as gr
 
-from toxic_classifier import TrainConfig, add_example, list_models, load_data, predict, train_model
+from db import SessionLocal
+from db.repository import add_labeled_example, labeled_dataframe, record_feedback
+from toxic_classifier import TrainConfig, list_models, predict, train_model
 from toxic_classifier.training import new_version_name
 
 
 # ---------------------------------------------------------
-# Handlers - מתרגמים בין ה-UI לליבת ה-ML
+# Handlers - מתרגמים בין ה-UI לליבת ה-ML ולמסד הנתונים
 # ---------------------------------------------------------
+def load_data():
+    with SessionLocal() as session:
+        return labeled_dataframe(session)
+
+
 def on_add_example(text, label_val):
-    try:
-        df = add_example(text, label_val)
-    except ValueError:
-        return load_data(), "אנא הכנס טקסט תקין"
+    with SessionLocal() as session:
+        try:
+            add_labeled_example(session, text, int(label_val))
+        except ValueError:
+            return labeled_dataframe(session), "אנא הכנס טקסט תקין"
+        df = labeled_dataframe(session)
     return df, f"הנתון נוסף בהצלחה! סך הכל דוגמאות: {len(df)}"
 
 
 def on_train(version, epochs, lr, batch_size):
     cfg = TrainConfig(version=version, epochs=int(epochs), learning_rate=float(lr), batch_size=int(batch_size))
     try:
-        result = train_model(cfg)
+        result = train_model(cfg, load_data())
     except ValueError:
         return "יש להזין לפחות 10 דוגמאות לפני תחילת האימון"
     return (
@@ -31,27 +40,26 @@ def on_train(version, epochs, lr, batch_size):
 
 def on_predict(model_name, text):
     if not model_name:
-        return "בחר מודל תקין מהרשימה", text, None
+        return "בחר מודל תקין מהרשימה", text, None, None
     pred = predict(model_name, text)
     if pred.is_toxic:
         res = f"תגובה רעילה / עוקצנית ({pred.toxic_prob * 100:.1f}%)"
     else:
         res = f"תגובה חיובית / ניטרלית ({pred.safe_prob * 100:.1f}%)"
-    return res, text, pred.label
+    return res, text, pred.label, model_name
 
 
-def on_feedback(text, predicted_label, is_correct):
+def on_feedback(text, predicted_label, model_name, is_correct):
     if not text or predicted_label is None:
         return "אין משפט פעיל לבדיקה"
 
-    if is_correct:
-        # המודל צדק - נוסיף את הדוגמה כמו שהיא
-        add_example(text, predicted_label)
-        return "תודה! הניחוי הנכון נשמר ב-Dataset לחיזוק המודל."
+    # המודל צדק - התגית נשארת. המודל טעה - נהפוך את התגית (0 ל-1, או 1 ל-0)
+    target_label = predicted_label if is_correct else 1 - predicted_label
+    with SessionLocal() as session:
+        record_feedback(session, target_label, text=text, predicted_label=predicted_label, model_version=model_name)
 
-    # המודל טעה - נהפוך את התגית (0 ל-1, או 1 ל-0)
-    target_label = 1 - predicted_label
-    add_example(text, target_label)
+    if is_correct:
+        return "תודה! הניחוי הנכון נשמר ב-Dataset לחיזוק המודל."
     return f"תודה! התיקון נשמר ב-Dataset בתור label={target_label} לאימון הבא."
 
 
@@ -81,6 +89,7 @@ with gr.Blocks(title="Dicta MLOps Studio", css=css_rtl, theme=gr.themes.Soft()) 
     # State לשמירת תוצאת הבדיקה הנוכחית
     current_text_state = gr.State("")
     current_pred_state = gr.State(None)
+    current_model_state = gr.State(None)
 
     with gr.Tabs():
         # לשונית 1: ניהול דאטה
@@ -141,18 +150,18 @@ with gr.Blocks(title="Dicta MLOps Studio", css=css_rtl, theme=gr.themes.Soft()) 
             predict_btn.click(
                 on_predict,
                 inputs=[model_selector, test_text],
-                outputs=[prediction_output, current_text_state, current_pred_state],
+                outputs=[prediction_output, current_text_state, current_pred_state, current_model_state],
             )
 
             correct_btn.click(
-                lambda txt, pred: on_feedback(txt, pred, is_correct=True),
-                inputs=[current_text_state, current_pred_state],
+                lambda txt, pred, model: on_feedback(txt, pred, model, is_correct=True),
+                inputs=[current_text_state, current_pred_state, current_model_state],
                 outputs=[feedback_status],
             )
 
             wrong_btn.click(
-                lambda txt, pred: on_feedback(txt, pred, is_correct=False),
-                inputs=[current_text_state, current_pred_state],
+                lambda txt, pred, model: on_feedback(txt, pred, model, is_correct=False),
+                inputs=[current_text_state, current_pred_state, current_model_state],
                 outputs=[feedback_status],
             )
 

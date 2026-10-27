@@ -5,10 +5,11 @@ from .config import MODELS_DIR
 
 
 def list_models() -> List[str]:
-    """גרסאות המודלים ברג'יסטרי, מהחדשה לישנה."""
+    """גרסאות המודלים ברג'יסטרי, מהחדשה לישנה (לפי זמן שמירה, כי שמות גרסה יכולים להיות חופשיים)."""
     if not MODELS_DIR.exists():
         return []
-    return sorted((d.name for d in MODELS_DIR.iterdir() if d.is_dir()), reverse=True)
+    dirs = [d for d in MODELS_DIR.iterdir() if d.is_dir()]
+    return [d.name for d in sorted(dirs, key=lambda d: d.stat().st_mtime, reverse=True)]
 
 
 def latest_model() -> Optional[str]:
