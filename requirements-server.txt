@@ -1,0 +1,15 @@
+# Runtime dependencies for the API and the Celery worker (installed in the Docker image).
+# torch is installed separately in the Dockerfile from the CPU wheel index.
+transformers==4.57.6
+huggingface_hub==0.36.2
+datasets==4.5.0
+evaluate==0.4.6
+accelerate==1.10.1
+pandas==2.3.3
+scikit-learn==1.6.1
+fastapi==0.128.8
+uvicorn==0.39.0
+SQLAlchemy==2.0.55
+alembic==1.16.5
+psycopg[binary]==3.2.13
+celery[redis]==5.5.3

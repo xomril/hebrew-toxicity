@@ -1,12 +1,44 @@
+# Whole stack: docker compose up --build
+#   admin    http://localhost:3000
+#   api      http://localhost:8000/docs
+# First run only, to load data.json into the database:
+#   docker compose run --rm api python -m scripts.import_json data.json
+
+# Pinned so the containers and the pgdata volume are found again if the folder is renamed
+name: hebrew-toxic-classifier
+
+x-db-url: &db-url postgresql+psycopg://toxic:${POSTGRES_PASSWORD:-toxic}@postgres:5432/toxic
+
+x-app-env: &app-env
+  DATABASE_URL: *db-url
+  REDIS_URL: redis://redis:6379/0
+  # read from .env (not baked into any image); needed for the private model repo and for publishing
+  HF_TOKEN: ${HUGGING_FACE_TOKEN:-}
+  HF_REPO_ID: ${HF_REPO_ID:-}
+  TOXIC_MODEL_VERSION: ${TOXIC_MODEL_VERSION:-}
+  ADMIN_ORIGINS: ${ADMIN_ORIGINS:-http://localhost:3000}
+
+# API, worker and the migration job run the same image
+x-server: &server
+  build: .
+  image: toxic-server
+  environment: *app-env
+  volumes:
+    # trained models; shared by the API and the worker, and kept on the host
+    - ${MODEL_REGISTRY_DIR:-./model_registry}:/app/model_registry
+    # downloaded base model (dicta-il/dictabert) so training doesn't re-download it
+    - hf-cache:/hf-cache
+
 services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_USER: toxic
-      POSTGRES_PASSWORD: toxic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-toxic}
       POSTGRES_DB: toxic
+    # published on localhost only, for psql / the natively run tools
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,7 +49,66 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  migrate:
+    <<: *server
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    # only the database: no token, no model volume
+    environment:
+      DATABASE_URL: *db-url
+    volumes: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *server
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # the API loads the model before it accepts requests
+      start_period: 180s
+
+  worker:
+    <<: *server
+    # --pool=solo: one training / upload at a time
+    command: ["celery", "-A", "worker.celery_app", "worker", "--pool=solo", "--loglevel=info"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  admin:
+    build:
+      context: ./admin
+      args:
+        # inlined into the browser bundle at build time: must be reachable from the user's browser
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+    image: toxic-admin
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:
+  hf-cache:

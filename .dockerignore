@@ -1,0 +1,23 @@
+# Secrets and local state must never end up in an image
+.env
+.env.*
+.git
+.claude
+.vscode
+*.db
+
+# Large or irrelevant to the server image
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+model_registry
+my_hebrew_toxic_model
+results
+admin
+dashboard
+legacy
+tests
+*.md
+Dockerfile
+docker-compose*.yml
