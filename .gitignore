@@ -1,0 +1,21 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Models and training outputs (large)
+model_registry/
+my_hebrew_toxic_model/
+results/
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# Gradio
+flagged/
+.gradio/
+
+# OS
+.DS_Store
